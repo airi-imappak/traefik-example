@@ -2,17 +2,21 @@ version: '3'
 services:
   traefik:
     image: traefik
+    #restart: always
     command:
       - --api.insecure=true
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
+      #- --entrypoints.websecure.address=:443
+      #- --entrypoints.mysql.address=:3306
+      #- --entrypoints.other.address=:10080
     ports:
       - 80:80
       - 8080:8080
     volumes:
       - //var/run/docker.sock:/var/run/docker.sock:ro
-  web:
+  front:
     build: .
     volumes:
       - .:/code
@@ -20,9 +24,94 @@ services:
       - redis
     labels:
       - traefik.enable=true
-      - traefik.port=5000
-      - traefik.http.routers.whoami.rule=Host(`localhost`)
-      - traefik.http.routers.whoami.entrypoints=web
-    scale: 3
+      - traefik.http.routers.front.rule=Host(`localhost`)
+      #- traefik.http.routers.front.priority=10
+      - traefik.http.routers.front.service=front
+      - traefik.http.routers.front.entrypoints=web
+      - traefik.http.services.front.loadbalancer.server.port=5000
   redis:
-    image: redis:alpine
+    image: redis
+  back:
+    build: .
+    volumes:
+      - .:/code
+    links:
+      - redis
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.back.rule=(Host(`localhost`)&&PathPrefix(`/api`))
+      #- traefik.http.routers.back.priority=20
+      - traefik.http.routers.back.entrypoints=web
+      - traefik.http.routers.back.service=back
+      - traefik.http.routers.back.middlewares=back@docker
+      - traefik.http.services.back.loadbalancer.server.port=5000
+      - traefik.http.middlewares.back.stripprefix.prefixes=/api
+    scale: 3
+  portainer:
+    image: portainer/portainer-ce
+    #restart: always
+    ports:
+      - 9000:9000
+    volumes:
+      - //var/run/docker.sock:/var/run/docker.sock:ro
+      - ./portainer:/data
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.portainer.loadbalancer.server.port=9000
+  prometheus:
+    image: prom/prometheus
+    #restart: always
+    #ports:
+    #  - 9090:9090
+    volumes:
+      - ./prometheus:/etc/prometheus
+      - ./prometheus/data:/prometheus
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.prometheus.loadbalancer.server.port=9090
+  grafana:
+    image: grafana/grafana
+    #restart: always
+    ports:
+      - 3000:3000
+    volumes:
+      - ./grafana/data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.grafana.loadbalancer.server.port=3000
+  postgres:
+    image: postgres
+    #restart: always
+    volumes: 
+      - ./postgres:/var/lib/postgresql/data
+    environment: 
+      - POSTGRES_PASSWORD=test
+      - PGDATA=/var/lib/postgresql/data/pgdata
+  kumacp:
+    image: kumahq/kuma-cp:1.1.4
+    #restart: always
+    ports: 
+      - 5678:5678
+      - 5681:5681
+    volumes: 
+      - ./kuma:/.kuma
+    links: 
+      - postgres
+    command: 
+      - run
+  front-sidecar:
+    image: kumahq/kuma-dp:1.1.4
+    #restart: always
+    # ports: 
+    #   - 5681:5681
+    # volumes: 
+    #   - ./kuma:/.kuma
+    command: 
+      - run
+    # network_mode: "service:front"
+    environment: 
+      - KUMA_CONTROL_PLANE_URL=http://kumacp:5678
+      - KUMA_DATAPLANE_MESH=default
+      - KUMA_DATAPLANE_NAME=front
+      - KUMA_DATAPLANE_ADMIN_PORT=9901

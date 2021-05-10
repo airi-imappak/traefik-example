@@ -1,0 +1,11 @@
+version: "2"
+
+services:
+  app:
+    image: busybox
+    command: top
+  sidecar:
+    image: busybox
+    command: top
+    # the following setting instructs Docker Compose to add `sidecar` container to the network namespace of `app` container
+    network_mode: "service:app"
